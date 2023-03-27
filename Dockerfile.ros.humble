@@ -323,7 +323,7 @@ RUN apt-get update -y \
  && colcon build
 
 ENV DEBIAN_FRONTEND=dialog
-
+RUN python3 -m pip install -U transforms3d
 
 RUN sed -i \
     's/ros_realsense_setup="\/ros_ws\/install\/setup.bash"/ros_realsense_setup="{$WS_DIR}\/install\/setup.bash"/g' \
