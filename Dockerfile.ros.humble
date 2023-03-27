@@ -3,7 +3,7 @@
 #   https://docs.ros.org/en/humble/Installation/Alternatives/Ubuntu-Development-Setup.html
 #
 ARG BASE_IMAGE=nvcr.io/nvidia/l4t-base:r32.5.0
-FROM ${BASE_IMAGE}
+FROM ${BASE_IMAGE} as rostorch
 
 ARG ROS_PKG=ros_base
 ENV ROS_DISTRO=humble
@@ -61,6 +61,7 @@ RUN apt-get update && \
 		python3-setuptools \
 		python3-vcstool \
 		python3-rosinstall-generator \
+        python3-dev \
 		libasio-dev \
 		libtinyxml2-dev \
 		libcunit1-dev \
@@ -132,7 +133,6 @@ RUN apt purge -y python3.9 libpython3.9* || echo "python3.9 not found, skipping 
 #
 RUN mkdir -p ${ROS_ROOT}/src && \
     cd ${ROS_ROOT} && \
-    
     # https://answers.ros.org/question/325245/minimal-ros2-installation/?answer=325249#post-id-325249
     rosinstall_generator --deps --rosdistro ${ROS_DISTRO} ${ROS_PKG} \
 		launch_xml \
@@ -156,11 +156,9 @@ RUN mkdir -p ${ROS_ROOT}/src && \
 		> ros2.${ROS_DISTRO}.${ROS_PKG}.rosinstall && \
     cat ros2.${ROS_DISTRO}.${ROS_PKG}.rosinstall && \
     vcs import src < ros2.${ROS_DISTRO}.${ROS_PKG}.rosinstall && \
-    
     # https://github.com/dusty-nv/jetson-containers/issues/181
     rm -r ${ROS_ROOT}/src/ament_cmake && \
     git -C ${ROS_ROOT}/src/ clone https://github.com/ament/ament_cmake -b ${ROS_DISTRO} && \
-
     # install dependencies using rosdep
     apt-get update && \
     cd ${ROS_ROOT} && \
@@ -173,12 +171,10 @@ RUN mkdir -p ${ROS_ROOT}/src && \
 	  --skip-keys "libopencv-dev libopencv-contrib-dev libopencv-imgproc-dev python-opencv python3-opencv" && \
     rm -rf /var/lib/apt/lists/* && \
     apt-get clean && \
-
     # build it!
     colcon build \
         --merge-install \
         --cmake-args -DCMAKE_BUILD_TYPE=Release && \
-    
     # remove build files
     rm -rf ${ROS_ROOT}/src && \
     rm -rf ${ROS_ROOT}/logs && \
@@ -217,6 +213,124 @@ RUN sed -i \
     cat /ros_entrypoint.sh
 
 RUN echo 'source ${ROS_ROOT}/install/setup.bash' >> /root/.bashrc
+
+ENTRYPOINT ["/ros_entrypoint.sh"]
+CMD ["bash"]
+WORKDIR /
+
+
+# ARG BASE_IMAGE=ros:humble-perception
+
+# The following steps are based on the offical multi-stage build: https://github.com/IntelRealSense/librealsense/blob/master/scripts/Docker/Dockerfile
+#################################
+#   Librealsense Builder Stage  #
+#################################
+FROM rostorch as librealsense-builder
+
+SHELL ["/bin/bash", "-c"]
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update \
+ && apt-get install -qq -y --no-install-recommends \
+    build-essential \
+    cmake \
+    git \
+    libssl-dev \
+    libusb-1.0-0-dev \
+    pkg-config \
+    libgtk-3-dev \
+    libglfw3-dev \
+    libgl1-mesa-dev \
+    libglu1-mesa-dev \   
+	libudev-dev \ 
+    curl \
+    python-dev \
+    ca-certificates \
+ && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /usr/src
+# Get the latest tag of remote repository: https://stackoverflow.com/a/12704727
+# Needs to be a single command as ENV can't be set from Bash command: https://stackoverflow.com/questions/34911622/dockerfile-set-env-to-result-of-command
+RUN export LIBRS_GIT_TAG=`git -c 'versionsort.suffix=-' \
+                         ls-remote --exit-code --refs --sort='version:refname' --tags https://github.com/IntelRealSense/librealsense '*.*.*' \
+                         | tail --lines=1 \
+                         | cut --delimiter='/' --fields=3`; \
+    export LIBRS_VERSION=${LIBRS_VERSION:-${LIBRS_GIT_TAG#"v"}}; \
+    curl https://codeload.github.com/IntelRealSense/librealsense/tar.gz/refs/tags/v${LIBRS_VERSION} -o librealsense.tar.gz; \
+    tar -zxf librealsense.tar.gz; \
+    rm librealsense.tar.gz; \
+    ln -s /usr/src/librealsense-${LIBRS_VERSION} /usr/src/librealsense
+
+RUN cd /usr/src/librealsense \
+ && mkdir build && cd build \
+ && cmake ../ \
+    -DCMAKE_C_FLAGS_RELEASE="${CMAKE_C_FLAGS_RELEASE} -s" \
+    -DCMAKE_CXX_FLAGS_RELEASE="${CMAKE_CXX_FLAGS_RELEASE} -s" \
+    -DCMAKE_INSTALL_PREFIX=/opt/librealsense \
+    -DFORCE_RSUSB_BACKEND=true \
+    -DBUILD_PYTHON_BINDINGS=true \
+    -DCMAKE_BUILD_TYPE=release \
+    -DBUILD_EXAMPLES=false \
+    -DBUILD_WITH_CUDA=true \
+    -DPYTHON_EXECUTABLE=$(which python) \
+    -DBUILD_GRAPHICAL_EXAMPLES=OFF \
+    -DCMAKE_CUDA_ARCHITECTURES=87 \
+ && make -j$(($(nproc)-1)) all \
+ && make install
+ 
+ ENV DEBIAN_FRONTEND=noninteractive
+
+######################################
+#   librealsense Base Image Stage    #
+######################################
+FROM rostorch as librealsense
+
+SHELL ["/bin/bash", "-c"]
+
+COPY --from=librealsense-builder /opt/librealsense /usr/local/
+COPY --from=librealsense-builder /usr/lib/python/dist-packages/pyrealsense2 /usr/lib/python3/dist-packages/pyrealsense2
+COPY --from=librealsense-builder /usr/src/librealsense/config/99-realsense-libusb.rules /etc/udev/rules.d/
+ENV PYTHONPATH=${PYTHONPATH}:/usr/local/lib
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends \	
+    libusb-1.0-0 \
+    udev \
+    apt-transport-https \
+    ca-certificates \
+    curl \
+    software-properties-common \
+    git \
+ && rm -rf /var/lib/apt/lists/*
+
+
+RUN source /opt/ros/humble/install/setup.bash
+# The following steps are based on: https://github.com/IntelRealSense/realsense-ros/tree/ros2-development
+ENV WS_DIR="/ros2_ws"
+WORKDIR ${WS_DIR}
+RUN apt-get update -y \
+ && mkdir src \
+ && cd src \
+ && git clone https://github.com/IntelRealSense/realsense-ros.git -b ros2-development \
+ && cd .. \
+ && apt-get install -y python3-rosdep \
+ && rm /etc/ros/rosdep/sources.list.d/20-default.list \
+ && rosdep init \
+ && rosdep update \
+ && rosdep install -i --from-path src --rosdistro ${ROS_DISTRO} --skip-keys=librealsense2 -y --os=ubuntu:focal\
+ && colcon build
+
+ENV DEBIAN_FRONTEND=dialog
+
+
+RUN sed -i \
+    's/ros_realsense_setup="\/ros_ws\/install\/setup.bash"/ros_realsense_setup="{$WS_DIR}\/install\/setup.bash"/g' \
+    /ros_entrypoint.sh && \
+    cat /ros_entrypoint.sh
+
+RUN echo 'source {$WS_DIR}\/install\/setup.bash' >> /root/.bashrc
 
 ENTRYPOINT ["/ros_entrypoint.sh"]
 CMD ["bash"]
