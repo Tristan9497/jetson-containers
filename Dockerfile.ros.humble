@@ -153,6 +153,8 @@ RUN mkdir -p ${ROS_ROOT}/src && \
 		image_transport \
 		compressed_image_transport \
 		compressed_depth_image_transport \
+        diagnostic_updater \
+        xacro \
 		> ros2.${ROS_DISTRO}.${ROS_PKG}.rosinstall && \
     cat ros2.${ROS_DISTRO}.${ROS_PKG}.rosinstall && \
     vcs import src < ros2.${ROS_DISTRO}.${ROS_PKG}.rosinstall && \
@@ -288,7 +290,7 @@ FROM rostorch as librealsense
 SHELL ["/bin/bash", "-c"]
 
 COPY --from=librealsense-builder /opt/librealsense /usr/local/
-COPY --from=librealsense-builder /usr/lib/python/dist-packages/pyrealsense2 /usr/lib/python3/dist-packages/pyrealsense2
+COPY --from=librealsense-builder /usr/lib/python3/dist-packages/pyrealsense2 /usr/lib/python3/dist-packages/pyrealsense2
 COPY --from=librealsense-builder /usr/src/librealsense/config/99-realsense-libusb.rules /etc/udev/rules.d/
 ENV PYTHONPATH=${PYTHONPATH}:/usr/local/lib
 
@@ -316,21 +318,23 @@ RUN apt-get update -y \
  && git clone https://github.com/IntelRealSense/realsense-ros.git -b ros2-development \
  && cd .. \
  && apt-get install -y python3-rosdep \
+ && apt-get update \
+ && source /opt/ros/${ROS_DISTRO}/install/setup.bash \
  && rm /etc/ros/rosdep/sources.list.d/20-default.list \
  && rosdep init \
- && rosdep update \
- && rosdep install -i --from-path src --rosdistro ${ROS_DISTRO} --skip-keys=librealsense2 -y --os=ubuntu:focal\
+ && rosdep update --include-eol-distros\
+ && rosdep install -i -r --from-path src --rosdistro ${ROS_DISTRO} --skip-keys=librealsense2 -y\
  && colcon build
 
 ENV DEBIAN_FRONTEND=dialog
 RUN python3 -m pip install -U transforms3d
 
 RUN sed -i \
-    's/ros_realsense_setup="\/ros_ws\/install\/setup.bash"/ros_realsense_setup="{$WS_DIR}\/install\/setup.bash"/g' \
+    's/ros_realsense_setup="\/ros_ws\/install\/setup.bash"/ros_realsense_setup="${WS_DIR}\/install\/setup.bash"/g' \
     /ros_entrypoint.sh && \
     cat /ros_entrypoint.sh
 
-RUN echo 'source {$WS_DIR}\/install\/setup.bash' >> /root/.bashrc
+RUN echo 'source ${WS_DIR}\/install\/setup.bash' >> /root/.bashrc
 
 ENTRYPOINT ["/ros_entrypoint.sh"]
 CMD ["bash"]
