@@ -269,7 +269,6 @@ RUN cd /usr/src/librealsense \
     -DCMAKE_C_FLAGS_RELEASE="${CMAKE_C_FLAGS_RELEASE} -s" \
     -DCMAKE_CXX_FLAGS_RELEASE="${CMAKE_CXX_FLAGS_RELEASE} -s" \
     -DCMAKE_INSTALL_PREFIX=/opt/librealsense \
-    -DFORCE_RSUSB_BACKEND=true \
     -DBUILD_PYTHON_BINDINGS=true \
     -DCMAKE_BUILD_TYPE=release \
     -DBUILD_EXAMPLES=false \
@@ -279,9 +278,9 @@ RUN cd /usr/src/librealsense \
     -DCMAKE_CUDA_ARCHITECTURES=87 \
  && make -j$(($(nproc)-1)) all \
  && make install
- 
- ENV DEBIAN_FRONTEND=noninteractive
 
+ ENV DEBIAN_FRONTEND=noninteractive
+ #-DFORCE_RSUSB_BACKEND=true \
 ######################################
 #   librealsense Base Image Stage    #
 ######################################
@@ -328,6 +327,8 @@ RUN apt-get update -y \
 
 ENV DEBIAN_FRONTEND=dialog
 RUN python3 -m pip install -U transforms3d
+
+CMD [ "rs-enumerate-devices", "--compact" ]
 
 RUN sed -i \
     's/ros_realsense_setup="\/ros_ws\/install\/setup.bash"/ros_realsense_setup="${WS_DIR}\/install\/setup.bash"/g' \
