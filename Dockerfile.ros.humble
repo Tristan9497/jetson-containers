@@ -155,6 +155,7 @@ RUN mkdir -p ${ROS_ROOT}/src && \
 		compressed_depth_image_transport \
         diagnostic_updater \
         xacro \
+        tf_transformations \
 		> ros2.${ROS_DISTRO}.${ROS_PKG}.rosinstall && \
     cat ros2.${ROS_DISTRO}.${ROS_PKG}.rosinstall && \
     vcs import src < ros2.${ROS_DISTRO}.${ROS_PKG}.rosinstall && \
@@ -326,7 +327,7 @@ RUN apt-get update -y \
  && colcon build
 
 ENV DEBIAN_FRONTEND=dialog
-RUN python3 -m pip install -U transforms3d
+RUN python3 -m pip install -U transforms3d tqdm scipy seaborn matplotlib
 
 CMD [ "rs-enumerate-devices", "--compact" ]
 
